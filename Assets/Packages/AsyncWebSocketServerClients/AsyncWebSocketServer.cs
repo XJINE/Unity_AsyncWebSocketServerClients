@@ -16,25 +16,26 @@ public class AsyncWebSocketServer : MonoBehaviour
 {
     #region Field
 
-    public bool     autoStart = true;
-    public bool     debugLog;
+    public bool     debugLog     = true;
+    public bool     autoStart    = true;
+    public bool     guidMode     = false;
     public Encoding textEncoding = Encoding.UTF8;
 
     [SerializeField] private IPEndPointInfo endPoint;
-    [SerializeField] private int            bufferSize  = 4 * 1024; // 4096 bytes
+    [SerializeField] private int            bufferSize = 4 * 1024; // 4096 bytes
 
     public UnityEvent<string>         clientConnected;
     public UnityEvent<string>         clientDisconnected;
-    public UnityEvent<string, byte[]> dataReceived;    // clientId, data
-    public UnityEvent<string, string> messageReceived; // clientId, message
-    public UnityEvent<string, string> messageSent;     // clientId, message
+    public UnityEvent<string, byte[]> binaryReceived;     // ClientId, Binary
+    public UnityEvent<string, string> textReceived;       // ClientId, Text
+    public UnityEvent<string>         messageSent;        // ClientId
     
     public UnityEvent<Exception> serverStartFailed;
     public UnityEvent<Exception> serverStopFailed;
-    public UnityEvent<Exception> acceptFailed;
-    public UnityEvent<Exception> handleClientFailed;
-    public UnityEvent<Exception> dataSendFailed;
-    public UnityEvent<Exception> dataReceiveFailed;
+    public UnityEvent<Exception> clientAcceptFailed;
+    public UnityEvent<Exception> clientHandleFailed;
+    public UnityEvent<Exception> messageSendFailed;
+    public UnityEvent<Exception> messageReceiveFailed;
 
     private          HttpListener                  _httpListener;
     private          CancellationTokenSource       _cancellationTokenSource;
@@ -73,6 +74,11 @@ public class AsyncWebSocketServer : MonoBehaviour
         }
     }
 
+    private void OnDestroy()
+    {
+        StopServer();
+    }
+
     public void StartServer()
     {
         try
@@ -90,9 +96,9 @@ public class AsyncWebSocketServer : MonoBehaviour
 
             _cancellationTokenSource = new CancellationTokenSource();
 
-            Debug.Log($"WebSocket Server started on {endPoint.HttpUrl}");
+            if (debugLog) { Debug.Log($"WebSocket Server started on {endPoint.HttpUrl}"); }
 
-            _ = AcceptClientsLoop();
+            _ = AcceptClient();
         }
         catch (Exception exception)
         {
@@ -113,7 +119,7 @@ public class AsyncWebSocketServer : MonoBehaviour
                 throw new Exception("Server is not running");
             }
 
-            Debug.Log("Stopping server...");
+            if (debugLog) { Debug.Log("Stopping server..."); }
 
             _cancellationTokenSource?.Cancel();
 
@@ -125,7 +131,7 @@ public class AsyncWebSocketServer : MonoBehaviour
             _httpListener?.Stop();
             _httpListener?.Close();
 
-            Debug.Log("Server stopped");
+            if(debugLog){ Debug.Log("Server stopped"); }
         }
         catch (Exception exception)
         {
@@ -141,85 +147,17 @@ public class AsyncWebSocketServer : MonoBehaviour
         }
     }
 
-    public async void SendMessageToClient(string clientId, string message)
-    {
-        try
-        {
-            if (!_clients.TryGetValue(clientId, out var webSocket))
-            {
-                throw new Exception($"Client {clientId} not found");
-            }
-
-            if (webSocket.State != WebSocketState.Open)
-            {
-                throw new Exception($"Client {clientId} is not connected");
-            }
-
-            var buffer = textEncoding.GetBytes(message);
-            await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
-
-            Debug.Log($"Message sent to {clientId}: {message}");
-
-            _mainThreadActions.Enqueue(() => messageSent.Invoke(clientId, message));
-        }
-        catch (Exception exception)
-        {
-            if(debugLog) { Debug.LogError($"Send error to {clientId}: {exception.Message}"); }
-
-            _mainThreadActions.Enqueue(() => dataSendFailed.Invoke(exception));
-
-            DisconnectClient(clientId);
-        }
-    }
-
-    public void SendMessageToAllClients(string message)
-    {
-        foreach (var clientId in _clients.Keys.ToArray())
-        {
-            SendMessageToClient(clientId, message);
-        }
-    }
-
-    public void DisconnectClient(string clientId)
-    {
-        if (!_clients.TryGetValue(clientId, out var webSocket))
-        {
-            return;
-        }
-
-        try
-        {
-            if (webSocket.State == WebSocketState.Open)
-            {
-                webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Server disconnect", CancellationToken.None);
-            }
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"Error disconnecting client {clientId}: {exception.Message}");
-        }
-        finally
-        {
-            _clients.Remove(clientId);
-            webSocket?.Dispose();
-
-            Debug.Log($"Client {clientId} disconnected");
-
-            _mainThreadActions.Enqueue(() => clientDisconnected.Invoke(clientId));
-        }
-    }
-
-    private async Task AcceptClientsLoop()
+    private async Task AcceptClient()
     {
         try
         {
             while (IsRunning && !_cancellationTokenSource.Token.IsCancellationRequested)
             {
                 var context = await _httpListener.GetContextAsync();
-                
+
                 if (context.Request.IsWebSocketRequest)
                 {
-                    _ = HandleWebSocketClient(context);
+                    _ = HandleClient(context);
                 }
                 else
                 {
@@ -230,19 +168,20 @@ public class AsyncWebSocketServer : MonoBehaviour
         }
         catch (ObjectDisposedException)
         {
-            Debug.Log("HttpListener disposed");
+            if (debugLog) { Debug.Log("HttpListener disposed"); }
         }
         catch (Exception exception)
         {
             if (debugLog) { Debug.LogError($"Accept clients error: {exception.Message}"); }
 
-            _mainThreadActions.Enqueue(() => acceptFailed.Invoke(exception));
+            _mainThreadActions.Enqueue(() => clientAcceptFailed.Invoke(exception));
         }
     }
 
-    private async Task HandleWebSocketClient(HttpListenerContext context)
+    private async Task HandleClient(HttpListenerContext context)
     {
-        var clientId = Guid.NewGuid().ToString();
+        var clientId = guidMode ? Guid.NewGuid().ToString()
+                                : context.Request.RemoteEndPoint?.Address.ToString();
         try
         {
             var webSocketContext = await context.AcceptWebSocketAsync(null);
@@ -254,13 +193,13 @@ public class AsyncWebSocketServer : MonoBehaviour
 
             _mainThreadActions.Enqueue(() => clientConnected.Invoke(clientId));
 
-            await HandleClientMessages(clientId, webSocket);
+            await ReceiveMessage(clientId, webSocket);
         }
         catch (Exception exception)
         {
             if (debugLog) { Debug.LogError($"WebSocket client error: {exception.Message}"); }
 
-            _mainThreadActions.Enqueue(() => handleClientFailed.Invoke(exception));
+            _mainThreadActions.Enqueue(() => clientHandleFailed.Invoke(exception));
         }
         finally
         {
@@ -271,7 +210,7 @@ public class AsyncWebSocketServer : MonoBehaviour
         }
     }
 
-    private async Task HandleClientMessages(string clientId, WebSocket webSocket)
+    private async Task ReceiveMessage(string clientId, WebSocket webSocket)
     {
         var buffer = new byte[bufferSize];
 
@@ -294,7 +233,7 @@ public class AsyncWebSocketServer : MonoBehaviour
                     {
                         if(debugLog){ Debug.Log($"Binary message from {clientId}"); }
 
-                        _mainThreadActions.Enqueue(() => dataReceived.Invoke(clientId, buffer));
+                        _mainThreadActions.Enqueue(() => binaryReceived.Invoke(clientId, buffer));
 
                         break;
                     }
@@ -304,7 +243,7 @@ public class AsyncWebSocketServer : MonoBehaviour
 
                         if(debugLog){ Debug.Log($"Message from {clientId}: {message}"); }
 
-                        _mainThreadActions.Enqueue(() => messageReceived.Invoke(clientId, message));
+                        _mainThreadActions.Enqueue(() => textReceived.Invoke(clientId, message));
 
                         break;
                     }
@@ -320,13 +259,93 @@ public class AsyncWebSocketServer : MonoBehaviour
         {
             if(debugLog) { Debug.LogError($"Message handling error for {clientId}: {exception.Message}"); }
 
-            _mainThreadActions.Enqueue(() => dataReceiveFailed.Invoke(exception));
+            _mainThreadActions.Enqueue(() => messageReceiveFailed.Invoke(exception));
         }
     }
 
-    private void OnDestroy()
+    public void DisconnectClient(string clientId)
     {
-        StopServer();
+        if (!_clients.TryGetValue(clientId, out var webSocket))
+        {
+            return;
+        }
+
+        try
+        {
+            if (webSocket.State == WebSocketState.Open)
+            {
+                webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Server disconnect", CancellationToken.None);
+            }
+        }
+        catch (Exception exception)
+        {
+            if(debugLog){ Debug.LogError($"Error disconnecting client {clientId}: {exception.Message}"); };
+        }
+        finally
+        {
+            _clients.Remove(clientId);
+            webSocket?.Dispose();
+
+            if(debugLog){ Debug.Log($"Client {clientId} disconnected"); }
+
+            _mainThreadActions.Enqueue(() => clientDisconnected.Invoke(clientId));
+        }
+    }
+
+    public void SendMessage(string clientId, string text)
+    {
+        SendMessage(clientId, textEncoding.GetBytes(text), WebSocketMessageType.Text);
+    }
+
+    public void SendMessage(string clientId, byte[] binary)
+    {
+        SendMessage(clientId, binary, WebSocketMessageType.Binary);
+    }
+
+    private async void SendMessage(string clientId, byte[] message, WebSocketMessageType messageType)
+    {
+        try
+        {
+            if (!_clients.TryGetValue(clientId, out var webSocket))
+            {
+                throw new Exception($"Client {clientId} not found");
+            }
+
+            if (webSocket.State != WebSocketState.Open)
+            {
+                throw new Exception($"Client {clientId} is not connected");
+            }
+
+            await webSocket.SendAsync(new ArraySegment<byte>(message), messageType, true, CancellationToken.None);
+
+            if (debugLog) { Debug.Log($"Message sent to {clientId}"); }
+
+            _mainThreadActions.Enqueue(() => messageSent.Invoke(clientId));
+        }
+        catch (Exception exception)
+        {
+            if(debugLog) { Debug.LogError($"Send error to {clientId}"); }
+
+            _mainThreadActions.Enqueue(() => messageSendFailed.Invoke(exception));
+
+            DisconnectClient(clientId);
+        }
+    }
+
+    public void SendMessageToAll(string text)
+    {
+        foreach (var clientId in _clients.Keys.ToArray())
+        {
+            SendMessage(clientId, text);
+        }
+    }
+
+    public void SendMessageToAll(byte[] binary)
+    {
+        foreach (var clientId in _clients.Keys.ToArray())
+        {
+            SendMessage(clientId, binary);
+        }
     }
 
     #endregion Method

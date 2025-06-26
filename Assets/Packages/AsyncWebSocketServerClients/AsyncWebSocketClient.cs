@@ -13,6 +13,7 @@ public class AsyncWebSocketClient : MonoBehaviour
     #region Field
 
     public bool     debugLog;
+    public bool     autoConnect  = true;
     public Encoding textEncoding = Encoding.UTF8;
 
     [SerializeField] private IPEndPointInfo server;
@@ -22,13 +23,13 @@ public class AsyncWebSocketClient : MonoBehaviour
     public UnityEvent         disconnected;
     public UnityEvent<byte[]> binaryReceived;
     public UnityEvent<string> textReceived;
-    public UnityEvent         sent;
+    public UnityEvent         messageSent;
 
     public UnityEvent<Exception> connectionFailed;
     public UnityEvent<Exception> disconnectionFailed;
-    public UnityEvent<Exception> binarySendFailed;
-    public UnityEvent<Exception> textReceiveFailed;
     public UnityEvent<Exception> cleanupFailed;
+    public UnityEvent<Exception> messageSendFailed;
+    public UnityEvent<Exception> messageReceiveFailed;
 
     private          ClientWebSocket         _webSocket;
     private          CancellationTokenSource _cancellationTokenSource;
@@ -43,6 +44,14 @@ public class AsyncWebSocketClient : MonoBehaviour
     #endregion Property
 
     #region Method
+
+    private void Start()
+    {
+        if (autoConnect)
+        {
+            ConnectToServer();
+        }
+    }
 
     private void Update()
     {
@@ -81,7 +90,7 @@ public class AsyncWebSocketClient : MonoBehaviour
 
             if (debugLog) { Debug.Log($"Connected to server: {webSocketUri}"); }
 
-            _ = ReceiveLoop();
+            _ = ReceiveMessage();
         }
         catch (Exception exception)
         {
@@ -89,6 +98,10 @@ public class AsyncWebSocketClient : MonoBehaviour
 
             _mainThreadActions.Enqueue(() => connectionFailed.Invoke(exception));
 
+            CleanupConnection();
+        }
+        finally
+        {
             CleanupConnection();
         }
     }
@@ -123,99 +136,6 @@ public class AsyncWebSocketClient : MonoBehaviour
         }
     }
 
-    public void SendAsync(string text)
-    {
-        SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text);
-    }
-
-    public void SendAsync(byte[] data)
-    {
-        SendAsync(data, WebSocketMessageType.Binary);
-    }
-
-    private async void SendAsync(byte[] data, WebSocketMessageType type)
-    {
-        try
-        {
-            if (!IsConnected || _webSocket?.State != WebSocketState.Open)
-            {
-                if(debugLog){ Debug.LogWarning("Cannot send message: not connected"); }
-
-                throw new Exception("Cannot send message: not connected");
-            }
-
-            await _webSocket.SendAsync(new ArraySegment<byte>(data), type, true, _cancellationTokenSource.Token);
-
-            if(debugLog){ Debug.Log($"Sent"); }
-
-            _mainThreadActions.Enqueue(() => sent.Invoke());
-        }
-        catch (Exception exception)
-        {
-            if(debugLog){ Debug.LogError($"Send error: {exception.Message}"); }
-
-            _mainThreadActions.Enqueue(() => binarySendFailed.Invoke(exception));
-        }
-    }
-
-    private async Task ReceiveLoop()
-    {
-        var buffer = new byte[bufferSize];
-
-        try
-        {
-            while (IsConnected
-                && _webSocket?.State == WebSocketState.Open
-                && !_cancellationTokenSource.Token.IsCancellationRequested)
-            {
-                var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), _cancellationTokenSource.Token);
-
-                switch (result.MessageType)
-                {
-                    case WebSocketMessageType.Close:
-                    {
-                        if (debugLog) { Debug.Log("Server closed connection"); }
-
-                        break;
-                    }
-                    case WebSocketMessageType.Binary:
-                    {
-                        if (debugLog) { Debug.Log("Data received"); }
-
-                        _mainThreadActions.Enqueue(() => binaryReceived.Invoke(buffer));
-
-                        break;
-                    }
-                    case WebSocketMessageType.Text:
-                    {
-                        var message = textEncoding.GetString(buffer, 0, result.Count);
-
-                        if (debugLog) { Debug.Log($"Message received: {message}"); }
-
-                        _mainThreadActions.Enqueue(() => textReceived.Invoke(message));
-
-                        break;
-                    } 
-                    default: continue;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            if(debugLog){ Debug.Log("Receive loop cancelled"); }
-        }
-        catch (Exception exception)
-        {
-            if(debugLog){ Debug.LogError($"Receive error: {exception.Message}"); }
-
-            _mainThreadActions.Enqueue(() => textReceiveFailed.Invoke(exception));
-        }
-        finally
-        {
-            CleanupConnection();
-        }
-    }
-
     private void CleanupConnection()
     {
         IsConnected = false;
@@ -236,6 +156,95 @@ public class AsyncWebSocketClient : MonoBehaviour
             if (debugLog) { Debug.LogError($"Cleanup error: {exception.Message}"); }
 
             _mainThreadActions.Enqueue(() => cleanupFailed.Invoke(exception));
+        }
+    }
+
+    private async Task ReceiveMessage()
+    {
+        var buffer = new byte[bufferSize];
+
+        try
+        {
+            while (IsConnected
+                   && _webSocket?.State == WebSocketState.Open
+                   && !_cancellationTokenSource.Token.IsCancellationRequested)
+            {
+                var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), _cancellationTokenSource.Token);
+
+                switch (result.MessageType)
+                {
+                    case WebSocketMessageType.Close:
+                    {
+                        if (debugLog) { Debug.Log("Server closed connection"); }
+
+                        return; // Exit the loop and cleanup connection.
+                    }
+                    case WebSocketMessageType.Binary:
+                    {
+                        if (debugLog) { Debug.Log("Binary received"); }
+
+                        _mainThreadActions.Enqueue(() => binaryReceived.Invoke(buffer));
+
+                        break;
+                    }
+                    case WebSocketMessageType.Text:
+                    {
+                        var message = textEncoding.GetString(buffer, 0, result.Count);
+
+                        if (debugLog) { Debug.Log($"Text received: {message}"); }
+
+                        _mainThreadActions.Enqueue(() => textReceived.Invoke(message));
+
+                        break;
+                    }
+                    default: continue;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if(debugLog){ Debug.Log("Receive loop cancelled"); }
+        }
+        catch (Exception exception)
+        {
+            if(debugLog){ Debug.LogError($"Receive error: {exception.Message}"); }
+
+            _mainThreadActions.Enqueue(() => messageReceiveFailed.Invoke(exception));
+        }
+    }
+
+    public new void SendMessage(string text)
+    {
+        SendMessage(textEncoding.GetBytes(text), WebSocketMessageType.Text);
+    }
+
+    public void SendMessage(byte[] data)
+    {
+        SendMessage(data, WebSocketMessageType.Binary);
+    }
+
+    private async void SendMessage(byte[] data, WebSocketMessageType type)
+    {
+        try
+        {
+            if (!IsConnected || _webSocket?.State != WebSocketState.Open)
+            {
+                if(debugLog){ Debug.LogWarning("Cannot send message: not connected"); }
+
+                throw new Exception("Cannot send message: not connected");
+            }
+
+            await _webSocket.SendAsync(new ArraySegment<byte>(data), type, true, _cancellationTokenSource.Token);
+
+            if(debugLog){ Debug.Log($"Message Sent"); }
+
+            _mainThreadActions.Enqueue(() => messageSent.Invoke());
+        }
+        catch (Exception exception)
+        {
+            if(debugLog){ Debug.LogError($"Message Send error: {exception.Message}"); }
+
+            _mainThreadActions.Enqueue(() => messageSendFailed.Invoke(exception));
         }
     }
 
