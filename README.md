@@ -1,6 +1,7 @@
 # Unity_AsyncWebSocketServerClients
 
 This project has failed due to an issu with Unity.
+
 https://discussions.unity.com/t/websocket-server-in-standalone-build/832108
 
 ```csharp
@@ -8,13 +9,13 @@ var context = await _httpListener.GetContextAsync();
 
 if (context.Request.IsWebSocketRequest)
 {
-	_ = HandleClient(context);
+    _ = HandleClient(context);
 }
 ```
 
 ``HttpListenerRequest.IsWebSocketRequest`` always returns `false`.
 
-```csharp`
+```csharp
 WebSocketProtocolComponent.s_DllFileName = Path.Combine(Environment.SystemDirectory, "websocket.dll");
 WebSocketProtocolComponent.s_WebSocketDllHandle = SafeLoadLibrary.LoadLibraryEx(WebSocketProtocolComponent.s_DllFileName);
 if (WebSocketProtocolComponent.s_WebSocketDllHandle.IsInvalid)
