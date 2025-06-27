@@ -2,9 +2,11 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,7 +23,7 @@ public class AsyncWebSocketServer : MonoBehaviour
     public bool     guidMode     = false;
     public Encoding textEncoding = Encoding.UTF8;
 
-    [SerializeField] private IPEndPointInfo endPoint;
+    [SerializeField] private IPEndPointInfo endPoint   = new ("127.0.0.1", 8080);
     [SerializeField] private int            bufferSize = 4 * 1024; // 4096 bytes
 
     public UnityEvent<string>         clientConnected;

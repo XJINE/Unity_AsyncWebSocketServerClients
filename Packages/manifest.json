@@ -1,8 +1,8 @@
 {
   "dependencies": {
     "com.unity.collab-proxy": "2.8.2",
-    "com.unity.feature.development": "1.0.1",
-    "com.unity.ugui": "1.0.0",
+    "com.unity.feature.development": "1.0.2",
+    "com.unity.ugui": "2.0.0",
     "com.xjine.ip_endpoint_info": "https://github.com/XJINE/Unity_IPEndPointInfo.git?path=Assets/Packages/IPEndPointInfo",
     "com.unity.modules.ai": "1.0.0",
     "com.unity.modules.androidjni": "1.0.0",

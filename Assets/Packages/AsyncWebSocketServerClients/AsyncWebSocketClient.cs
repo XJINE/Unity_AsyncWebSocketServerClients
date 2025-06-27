@@ -16,8 +16,9 @@ public class AsyncWebSocketClient : MonoBehaviour
     public bool     autoConnect  = true;
     public Encoding textEncoding = Encoding.UTF8;
 
-    [SerializeField] private IPEndPointInfo server;
-    [SerializeField] private int            bufferSize = 4 * 1024; // 4096 bytes
+    [SerializeField] private IPEndPointInfo server          = new ("127.0.0.1", 8080);
+    [SerializeField] private int            bufferSize      = 4 * 1024; // 4096 bytes
+    [SerializeField] private string         timeStampFormat = "HH:mm:ss";
 
     public UnityEvent         connected;
     public UnityEvent         disconnected;
@@ -39,7 +40,8 @@ public class AsyncWebSocketClient : MonoBehaviour
 
     #region Property
 
-    public bool IsConnected { get; private set; }
+    public bool   IsConnected { get; private set; }
+    public string TimeStamp => DateTime.Now.ToString(timeStampFormat);
 
     #endregion Property
 
@@ -66,6 +68,7 @@ public class AsyncWebSocketClient : MonoBehaviour
         DisconnectFromServer();
     }
 
+    [ContextMenu(nameof(ConnectToServer))]
     public async void ConnectToServer()
     {
         try
@@ -95,6 +98,7 @@ public class AsyncWebSocketClient : MonoBehaviour
         catch (Exception exception)
         {
             if (debugLog) { Debug.LogError($"Connection failed: {exception.Message}"); }
+            Debug.Log(exception.GetType());
 
             _mainThreadActions.Enqueue(() => connectionFailed.Invoke(exception));
 
@@ -110,7 +114,7 @@ public class AsyncWebSocketClient : MonoBehaviour
     {
         if (!IsConnected)
         {
-            if (debugLog) { Debug.LogWarning("Not connected to server"); }
+            if (debugLog) { Debug.Log("Not connected to server"); }
             return;
         }
         try
