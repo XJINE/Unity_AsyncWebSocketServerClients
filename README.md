@@ -1,6 +1,6 @@
 # Unity_AsyncWebSocketServerClients
 
-This project has failed due to an issu with Unity.
+This project has failed due to an issue with Unity.
 
 https://discussions.unity.com/t/websocket-server-in-standalone-build/832108
 
